@@ -22,12 +22,17 @@
 依赖：``aiohttp``、``charset-normalizer``
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
+import asyncio
 import base64 as base64_module
 import ipaddress
+import math
+import os
 import socket
 
 from charset_normalizer import from_bytes
@@ -954,7 +959,7 @@ class FileReaderPlugin(MaiBotPlugin):
                 return True
         return False
 
-    def _validate_download_url(self, url: str, *, enforce_ssrf: bool) -> str:
+    async def _validate_download_url(self, url: str, *, enforce_ssrf: bool) -> str:
         """校验下载 URL，必要时拦截私有/本地目标（SSRF 防护）。
 
         Args:
@@ -1005,8 +1010,10 @@ class FileReaderPlugin(MaiBotPlugin):
             return text
 
         # DNS 解析后检查所有 A/AAAA，防止 DNS rebinding 到内网
+        # 走 loop.getaddrinfo 而非 socket.getaddrinfo，避免在 event loop 上同步阻塞
         try:
-            addrinfo = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            addrinfo = await asyncio.get_running_loop().getaddrinfo(hostname, port)
         except socket.gaierror as exc:
             raise ValueError(f"无法解析主机名：{hostname}") from exc
 
@@ -1034,11 +1041,11 @@ class FileReaderPlugin(MaiBotPlugin):
         """
 
         read_config = self.config.read
-        current_url = self._validate_download_url(url, enforce_ssrf=enforce_ssrf)
+        current_url = await self._validate_download_url(url, enforce_ssrf=enforce_ssrf)
         timeout = aiohttp.ClientTimeout(total=read_config.timeout_seconds)
 
         # 手动跟随重定向，每跳都重新校验目标，避免 302 跳进内网
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
             for _ in range(_MAX_DOWNLOAD_REDIRECTS + 1):
                 async with session.get(current_url, allow_redirects=False) as response:
                     if response.status in {301, 302, 303, 307, 308}:
@@ -1046,7 +1053,7 @@ class FileReaderPlugin(MaiBotPlugin):
                         if not location:
                             raise ValueError(f"重定向响应缺少 Location（HTTP {response.status}）")
                         next_url = urljoin(current_url, location)
-                        current_url = self._validate_download_url(next_url, enforce_ssrf=enforce_ssrf)
+                        current_url = await self._validate_download_url(next_url, enforce_ssrf=enforce_ssrf)
                         continue
 
                     response.raise_for_status()
@@ -1072,9 +1079,21 @@ class FileReaderPlugin(MaiBotPlugin):
         if napcat_config.access_token:
             headers["Authorization"] = f"Bearer {napcat_config.access_token}"
 
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        max_bytes = self.config.read.max_download_bytes
+        # 提前检查 Content-Length，避免 await response.json() 拉取过大响应体到内存
+        max_b64_chars = math.ceil(max_bytes / 3) * 4
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=False) as session:
             async with session.post(f"{base_url}/get_file", json={"file_id": file_id, "file": file_id}) as response:
                 response.raise_for_status()
+                cl_raw = response.headers.get("content-length")
+                if cl_raw:
+                    try:
+                        cl_int = int(cl_raw)
+                    except (TypeError, ValueError):
+                        cl_int = 0
+                    # JSON body ≈ base64 长度 + 少量包装字符，留 2x 余量保守估计
+                    if cl_int > max_b64_chars * 2:
+                        raise ValueError(f"NapCat get_file 响应体超过上限（{max_bytes} 字节）")
                 payload = await response.json(content_type=None)
 
         if not isinstance(payload, dict) or payload.get("status") == "failed":
@@ -1086,9 +1105,13 @@ class FileReaderPlugin(MaiBotPlugin):
 
         base64_content = str(data.get("base64") or "").strip()
         if base64_content:
+            # 防御性二次校验：base64 字符串长度超过 max_b64_chars 就不去 b64decode，
+            # 避免再分配 4:3 等价的内存。解码后再做一次精确字节数校验。
+            if len(base64_content) > max_b64_chars:
+                raise ValueError(f"文件超过大小上限（{max_bytes} 字节）")
             raw = base64_module.b64decode(base64_content)
-            if len(raw) > self.config.read.max_download_bytes:
-                raise ValueError(f"文件超过大小上限（{self.config.read.max_download_bytes} 字节）")
+            if len(raw) > max_bytes:
+                raise ValueError(f"文件超过大小上限（{max_bytes} 字节）")
             return raw
 
         file_url = str(data.get("url") or "").strip()
@@ -1117,15 +1140,29 @@ class FileReaderPlugin(MaiBotPlugin):
                 "请在 [napcat] allowed_local_prefixes 中配置，或让 NapCat 返回 base64/url。"
             )
 
-        if not resolved.is_file():
-            raise ValueError("本地路径不是有效文件")
-
-        size = resolved.stat().st_size
         max_bytes = self.config.read.max_download_bytes
-        if size > max_bytes:
-            raise ValueError(f"文件超过大小上限（{max_bytes} 字节）")
 
-        return resolved.read_bytes()
+        # TOCTOU 防护：先 open 拿 fd，在 fd 上 fstat 拿 size，避免 is_file + stat + read_bytes 三步
+        # 让攻击者在检查后替换大文件。先打开的文件描述符固定指向原文件。
+        try:
+            fd = os.open(str(resolved), os.O_RDONLY)
+        except OSError as exc:
+            raise ValueError(f"无法打开本地路径：{exc}") from exc
+        try:
+            size = os.fstat(fd).st_size
+            if size > max_bytes:
+                raise ValueError(f"文件超过大小上限（{max_bytes} 字节）")
+            chunks: list[bytes] = []
+            remaining = size
+            while remaining > 0:
+                chunk = os.read(fd, min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            return b"".join(chunks)
+        finally:
+            os.close(fd)
 
     def _is_local_path_allowed(self, resolved: Path) -> bool:
         """判断解析后的本地路径是否落在白名单前缀下"""
@@ -1467,7 +1504,7 @@ class FileReaderPlugin(MaiBotPlugin):
 
         timeout = aiohttp.ClientTimeout(total=self.config.read.timeout_seconds)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
                 async with session.post(url, json=body, headers=headers) as response:
                     response.raise_for_status()
                     payload = await response.json(content_type=None)

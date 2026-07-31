@@ -488,7 +488,7 @@ async def test_ssrf_blocks_private_urls() -> None:
     ]
     for url in blocked:
         try:
-            plugin._validate_download_url(url, enforce_ssrf=True)
+            await plugin._validate_download_url(url, enforce_ssrf=True)
             raise AssertionError(f"应拦截 URL：{url}")
         except ValueError as exc:
             assert "拒绝" in str(exc) or "不允许" in str(exc) or "仅支持" in str(exc) or "主机" in str(exc), (
@@ -496,11 +496,11 @@ async def test_ssrf_blocks_private_urls() -> None:
             )
 
     # 公网字面量 IP 应通过校验（不发起真实请求）
-    ok_url = plugin._validate_download_url("https://1.1.1.1/cdn-cgi/trace", enforce_ssrf=True)
+    ok_url = await plugin._validate_download_url("https://1.1.1.1/cdn-cgi/trace", enforce_ssrf=True)
     assert ok_url.startswith("https://1.1.1.1")
 
     # enforce_ssrf=False 时允许本机（NapCat 兜底场景）
-    local_ok = plugin._validate_download_url("http://127.0.0.1:3000/cache/a.txt", enforce_ssrf=False)
+    local_ok = await plugin._validate_download_url("http://127.0.0.1:3000/cache/a.txt", enforce_ssrf=False)
     assert "127.0.0.1" in local_ok
 
     print("[ssrf-block] OK")
@@ -520,11 +520,12 @@ async def test_ssrf_host_whitelist() -> None:
         ),
     )
     # mock DNS：白名单主机解析到公网 IP，避免依赖真实解析
+    # 现在走 loop.getaddrinfo，patch 到 socket 源模块
     public_ai = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443))]
-    with patch("plugin.socket.getaddrinfo", return_value=public_ai):
-        plugin._validate_download_url("https://cdn.example.com/a.txt", enforce_ssrf=True)
+    with patch("socket.getaddrinfo", return_value=public_ai):
+        await plugin._validate_download_url("https://cdn.example.com/a.txt", enforce_ssrf=True)
     try:
-        plugin._validate_download_url("https://evil.example.com/a.txt", enforce_ssrf=True)
+        await plugin._validate_download_url("https://evil.example.com/a.txt", enforce_ssrf=True)
         raise AssertionError("非白名单主机应被拒绝")
     except ValueError as exc:
         assert "白名单" in str(exc)
