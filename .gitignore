@@ -44,3 +44,6 @@ Thumbs.db
 !data/
 !cookies-*.json
 
+
+# OMC CLI
+.omc/
