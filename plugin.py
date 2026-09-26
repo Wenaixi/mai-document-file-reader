@@ -518,15 +518,17 @@ class FileReaderPlugin(MaiBotPlugin):
         if self.config.model.mode == "external":
             result = await self._generate_external(prompt_messages, tools=fixed_tools)
         else:
+            # MaiBot 1.2.5 起 model 会被宿主当作具体模型名解析，任务名必须走 task_name；
+            # 空配置保持 None，不传 task_name，等价于沿用 SDK 默认任务。
             task_name = self.config.model.task_name.strip() or None
             if fixed_tools:
                 result = await self.ctx.llm.generate_with_tools(
                     prompt_messages,
                     tools=self._host_tool_definitions(fixed_tools),
-                    model=task_name,
+                    task_name=task_name,
                 )
             else:
-                result = await self.ctx.llm.generate(prompt_messages, model=task_name)
+                result = await self.ctx.llm.generate(prompt_messages, task_name=task_name)
 
         if not result.get("success"):
             reason = str(result.get("reasoning") or result.get("response") or "未知错误")
