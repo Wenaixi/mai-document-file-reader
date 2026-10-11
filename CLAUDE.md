@@ -1,5 +1,13 @@
 # 文件读插件（file-reader-plugin）
 
+## 官方上游与版本溯源
+- 官方仓库（Upstream Repository）：https://github.com/xiexiaojia780/file_reader_plugin
+- 官方作者（Author / Maintainer）：xiexiaojia780
+- 功能定位：文件阅读与文档解析插件
+- 本地演进定位：基于官方上游最新版本，融入本地生产环境兼容性定制与稳定性加固。
+- 本地专属定制：本地完成 task_name 模型调度解耦与沙盒白名单目录放行。
+
+
 源: GitHub `xiexiaojia780/file-reader-plugin`
 
 ## 主人改过的关键文件
