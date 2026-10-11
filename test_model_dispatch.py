@@ -188,14 +188,14 @@ async def test_host_mode() -> None:
     plugin.ctx.llm.generate_with_tools.assert_awaited_once()
     plugin.ctx.llm.generate.assert_not_awaited()
     call_kwargs = plugin.ctx.llm.generate_with_tools.await_args.kwargs
-    assert call_kwargs.get("model") == "replyer", f"host 应传 task_name=replyer，得到 {call_kwargs}"
+    assert call_kwargs.get("task_name") == "replyer", f"host 应传 task_name=replyer，得到 {call_kwargs}"
     tools = call_kwargs.get("tools") or []
     assert isinstance(tools, list) and tools, "应附带固定 tools"
     assert tools[0].get("name") == "submit_file_result"
     sent_texts = [c.args[0] for c in plugin.ctx.send.text.await_args_list if c.args]
     assert "HOST_REPLY" in sent_texts
     _assert_reply_not_stored(plugin)
-    print(f"[host] OK：generate_with_tools(model={call_kwargs.get('model')!r}) tools={len(tools)} intercept={intercept}")
+    print(f"[host] OK：generate_with_tools(task_name={call_kwargs.get('task_name')!r}) tools={len(tools)} intercept={intercept}")
 
 
 async def test_host_mode_empty_task() -> None:
@@ -205,8 +205,8 @@ async def test_host_mode_empty_task() -> None:
     plugin._decode_text = MagicMock(return_value=("hello world content", False))
     await _run_handler(plugin)
     call_kwargs = plugin.ctx.llm.generate_with_tools.await_args.kwargs
-    assert call_kwargs.get("model") is None, f"空 task_name 应传 None，得到 {call_kwargs}"
-    print("[host-empty] OK：空 task_name -> model=None")
+    assert call_kwargs.get("task_name") is None, f"空 task_name 应传 None，得到 {call_kwargs}"
+    print("[host-empty] OK：空 task_name -> task_name=None")
 
 
 async def test_external_mode() -> None:

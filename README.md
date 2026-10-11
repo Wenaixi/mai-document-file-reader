@@ -73,7 +73,7 @@ file_reader_plugin/
 
 | `model.mode` | 行为 |
 |--------------|------|
-| `host`（默认） | 使用宿主任务模型：`ctx.llm.generate(model=task_name)`。注意这里的 `model` 是**任务名**（如 `replyer`），不是具体模型 ID |
+| `host`（默认） | 使用宿主任务模型：`ctx.llm.generate(task_name=task_name)`。MaiBot 1.2.5 起 `model` 只表示具体模型名，任务名必须传 `task_name` |
 | `external` | 插件用 aiohttp 直调 OpenAI 兼容或 Anthropic 原生接口 |
 
 `external` 时必须配置 `api_key`，否则指令会直接提示并中止。
