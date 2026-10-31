@@ -46,7 +46,8 @@ class ExcelParser(BaseParser):
             )
 
         try:
-            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+            # 避免 read_only=True 导致腾讯文档/WPS 等 XML 维度标签残缺文件被错误截断为仅首格
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
         except Exception as e:
             return ParsedDocument(
                 filename=filename,
