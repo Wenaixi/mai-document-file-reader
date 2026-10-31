@@ -1211,7 +1211,8 @@ class FileReaderPlugin(MaiBotPlugin):
 
         max_chars = self.config.read.max_chars
         if len(text) > max_chars:
-            return text[:max_chars], True
+            truncated_text = text[:max_chars] + "\n\n...[文件过长，已安全截断前 20,000 字以保护大模型上下文]..."
+            return truncated_text, True
         return text, False
 
     def _get_fixed_tools(self) -> list[dict[str, Any]]:
