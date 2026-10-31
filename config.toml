@@ -1,6 +1,6 @@
 [plugin]
 enabled = true
-config_version = "0.1.0"
+config_version = "1.0.0"
 
 [napcat]
 # NapCat OneBot HTTP 服务地址（需在 NapCat 中开启 HTTP）
@@ -31,7 +31,7 @@ silent_deny = false
 # 读入文件的最大字符数，超出部分截断，避免上下文过长
 max_chars = 20000
 # 允许下载/读取的最大文件字节数（默认约 5MB）
-max_download_bytes = 5000000
+max_download_bytes = 15728640
 # 下载与 NapCat / 外部 API 请求超时（秒）
 timeout_seconds = 30
 # 用户未写要求时的默认处理指令
@@ -66,3 +66,21 @@ api_key = ""
 model_name = "gpt-4o-mini"
 temperature = 0.7
 max_tokens = 2048
+
+[vlm]
+# 是否开启 PDF 图像与图表 VLM 视觉分析
+enabled = true
+# 优先使用的宿主视觉多模态任务名
+task_name = "vlm"
+# 单个 PDF 最多调用的图片/扫描页分析数量（防 Token 账单溢出）
+max_images_per_file = 3
+# 判定为扫描页的单页最少字符阈值（低于此值触发全页视觉解析）
+scan_page_char_threshold = 50
+
+[formats]
+# 启用的文档格式扩展
+enable_pdf = true
+enable_docx = true
+enable_excel = true
+enable_pptx = true
+enable_text = true

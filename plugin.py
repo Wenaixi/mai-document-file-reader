@@ -36,7 +36,12 @@ import os
 import socket
 
 from charset_normalizer import from_bytes
-from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase
+from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
+from maibot_sdk.types import ToolParameterInfo, ToolParamType
+
+from .parsers import default_registry
+from .utils.truncation import adaptive_truncate
+from .vlm.vlm_client import VLMClient
 
 import aiohttp
 
@@ -359,6 +364,33 @@ class ModelConfig(PluginConfigBase):
     max_tokens: int = Field(default=2048, ge=1, description="external 模式：生成最大 token 数")
 
 
+class VLMConfig(PluginConfigBase):
+    """视觉多模态大模型配置"""
+
+    __ui_label__ = "视觉增强 (VLM)"
+    __ui_icon__ = "eye"
+    __ui_order__ = 5
+
+    enabled: bool = Field(default=True, description="是否启用 PDF 图像与图表 VLM 视觉分析")
+    task_name: str = Field(default="vlm", description="宿主配置的视觉模型任务名称")
+    max_images_per_file: int = Field(default=3, ge=1, le=10, description="单个文档最多分析的图表或扫描页数量（防 Token 账单溢出）")
+    scan_page_char_threshold: int = Field(default=50, ge=10, le=200, description="判定为扫描页的单页最少字符阈值（低于此值触发全页视觉解析）")
+
+
+class FormatsConfig(PluginConfigBase):
+    """文档格式支持开关"""
+
+    __ui_label__ = "格式扩展"
+    __ui_icon__ = "file-text"
+    __ui_order__ = 6
+
+    enable_pdf: bool = Field(default=True, description="支持 PDF 文档 (.pdf)")
+    enable_docx: bool = Field(default=True, description="支持 Word 文档 (.docx)")
+    enable_excel: bool = Field(default=True, description="支持 Excel/CSV 表格 (.xlsx, .csv)")
+    enable_pptx: bool = Field(default=True, description="支持 PowerPoint 演示文稿 (.pptx)")
+    enable_text: bool = Field(default=True, description="支持代码与纯文本格式")
+
+
 class FileReaderPluginConfig(PluginConfigBase):
     """文件阅读插件配置"""
 
@@ -367,6 +399,8 @@ class FileReaderPluginConfig(PluginConfigBase):
     access: AccessConfig = Field(default_factory=AccessConfig)
     read: ReadConfig = Field(default_factory=ReadConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
+    vlm: VLMConfig = Field(default_factory=VLMConfig)
+    formats: FormatsConfig = Field(default_factory=FormatsConfig)
 
 
 class FileReaderPlugin(MaiBotPlugin):
@@ -376,10 +410,13 @@ class FileReaderPlugin(MaiBotPlugin):
 
     async def on_load(self) -> None:
         """处理插件加载"""
+        vlm_task = getattr(self.config.vlm, "task_name", "vlm") if hasattr(self.config, "vlm") else "vlm"
+        self._vlm_client = VLMClient(self.ctx, task_name=vlm_task)
         self.ctx.logger.info(
-            "文件阅读插件已加载 mode=%s provider=%s",
+            "文件阅读插件已加载 mode=%s provider=%s vlm_task=%s",
             self.config.model.mode,
             self.config.model.provider,
+            vlm_task,
         )
 
     async def on_unload(self) -> None:
@@ -499,13 +536,12 @@ class FileReaderPlugin(MaiBotPlugin):
             await self._reply_text(f"获取文件失败：{exc}", stream_id)
             return False, f"获取文件失败: {exc}", intercept_level
 
-        # 2. 按纯文本解码
-        text_content, truncated = self._decode_text(file_bytes)
+        # 2. 统一多格式智能解析与自适应结构化截断
+        filename = (file_ref.split("/")[-1].split("?")[0] if "/" in file_ref else file_ref) or "document"
+        text_content, truncated, doc_format = await self._decode_document(filename, file_bytes)
         if not text_content.strip():
             await self._reply_text(
-                "文件内容为空或无法按文本读取。\n"
-                "本插件仅支持纯文本类文件（.txt/.md/.json/.log/源码等），"
-                "不支持 PDF、Word、Excel、图片等二进制格式。",
+                f"未能从文件 [{filename}] ({doc_format}) 中提取出可读文本内容，可能格式不支持或文件已损坏。",
                 stream_id,
             )
             return False, "文件无可读文本", intercept_level
@@ -1203,17 +1239,84 @@ class FileReaderPlugin(MaiBotPlugin):
             chunks.append(chunk)
         return b"".join(chunks)
 
-    def _decode_text(self, file_bytes: bytes) -> tuple[str, bool]:
-        """将文件字节按纯文本解码，并按字符上限截断"""
+    async def _decode_document(self, filename: str, file_bytes: bytes) -> tuple[str, bool, str]:
+        """将文档通过多格式工厂解析为文本，并执行全格式自适应结构化截断"""
+        vlm_client = self._vlm_client if getattr(self.config.vlm, "enabled", True) else None
+        max_images = getattr(self.config.vlm, "max_images_per_file", 3)
 
-        best_match = from_bytes(file_bytes).best()
-        text = str(best_match) if best_match is not None else file_bytes.decode("utf-8", errors="replace")
+        parsed_doc = await default_registry.parse(
+            filename=filename,
+            file_bytes=file_bytes,
+            vlm_client=vlm_client,
+            max_vlm_images=max_images,
+        )
 
         max_chars = self.config.read.max_chars
-        if len(text) > max_chars:
-            truncated_text = text[:max_chars] + "\n\n...[文件过长，已安全截断前 20,000 字以保护大模型上下文]..."
-            return truncated_text, True
-        return text, False
+        truncated_text, is_truncated = adaptive_truncate(parsed_doc.text_content, max_chars=max_chars)
+        return truncated_text, is_truncated, parsed_doc.format
+
+    @Tool(
+        "read_document",
+        description="读取并深度分析群聊或引用的文档文件（支持 Word .docx、PDF .pdf、Excel .xlsx/.csv、PPT .pptx、各类代码源文件及纯文本），具备图表 VLM 视觉分析与全格式自适应截断能力。",
+        parameters=[
+            ToolParameterInfo(
+                name="file_reference",
+                type=ToolParamType.STRING,
+                description="文件标识，可以是引用的文件名（如：项目报告.pdf）、群文件 file_id、文件下载 URL 或临时路径",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="user_query",
+                type=ToolParamType.STRING,
+                description="对文件的阅读或分析要求（如：概括核心要点、提取关键行动项、解释代码架构等），留空则使用默认要求",
+                required=False,
+            ),
+        ],
+    )
+    async def read_document(self, file_reference: str, user_query: str = "") -> str:
+        """作为大模型工具供 Planner / LLM 自主调用。"""
+        if not self.config.plugin.enabled:
+            return "文件阅读插件当前未启用。"
+
+        req = (user_query or "").strip() or self.config.read.default_requirement
+        file_ref = (file_reference or "").strip()
+        if not file_ref:
+            return "错误: 缺少有效的文件标识参数 file_reference。"
+
+        try:
+            file_bytes, source_desc = await self._fetch_file_bytes(file_ref)
+        except Exception as exc:
+            return f"获取文档失败 ({file_ref}): {exc}"
+
+        filename = file_ref.split("/")[-1].split("?")[0] or "document.txt"
+        text_content, truncated, doc_format = await self._decode_document(filename, file_bytes)
+
+        if not text_content.strip():
+            return f"未能从文件 [{filename}] ({doc_format}) 中提取出可读文本内容。"
+
+        # 调用 LLM 生成总结或按要求回答
+        prompt_messages = self._build_prompt_messages(req, text_content, truncated)
+        fixed_tools = self._get_fixed_tools()
+        task_name = self.config.model.task_name.strip() or None
+
+        if self.config.model.mode == "external":
+            result = await self._generate_external(prompt_messages, tools=fixed_tools)
+        else:
+            if fixed_tools:
+                result = await self.ctx.llm.generate_with_tools(
+                    prompt_messages,
+                    tools=self._host_tool_definitions(fixed_tools),
+                    task_name=task_name,
+                )
+            else:
+                result = await self.ctx.llm.generate(prompt_messages, task_name=task_name)
+
+        if not result.get("success"):
+            return f"文档已提取（共 {len(text_content)} 字），但大模型处理失败: {result.get('reasoning') or '未知错误'}"
+
+        content = self._extract_result_text(result)
+        return content or "文档已提取完毕，模型未返回文字内容。"
+
 
     def _get_fixed_tools(self) -> list[dict[str, Any]]:
         """返回固定 tools 定义的深拷贝列表；关闭时返回空列表。"""

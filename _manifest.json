@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "name": "麦麦群文件快速阅读与提炼",
-  "description": "通过指令或引用文件消息读取纯文本文件，交给 LLM 按要求处理后回复",
+  "description": "智能多格式文档阅读引擎，支持 Word (.docx)、PDF (.pdf)、Excel (.xlsx/.csv)、PPT (.pptx) 及源码纯文本，具备图表 VLM 视觉分析与全格式自适应结构化截断能力。",
   "author": {
     "name": "Wenaixi",
     "url": "https://github.com/Wenaixi/mai-document-file-reader"
@@ -29,6 +29,31 @@
       "type": "python_package",
       "name": "charset-normalizer",
       "version_spec": ">=3.0"
+    },
+    {
+      "type": "python_package",
+      "name": "pypdf",
+      "version_spec": ">=4.0.0"
+    },
+    {
+      "type": "python_package",
+      "name": "python-docx",
+      "version_spec": ">=1.0.0"
+    },
+    {
+      "type": "python_package",
+      "name": "openpyxl",
+      "version_spec": ">=3.1.0"
+    },
+    {
+      "type": "python_package",
+      "name": "python-pptx",
+      "version_spec": ">=0.6.21"
+    },
+    {
+      "type": "python_package",
+      "name": "pillow",
+      "version_spec": ">=10.0.0"
     }
   ],
   "capabilities": [
