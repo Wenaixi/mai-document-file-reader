@@ -28,10 +28,10 @@ class TestReadDocumentFix(unittest.TestCase):
         plugin.ctx.llm.generate = AsyncMock(return_value={"success": True, "response": "Summary OK"})
         plugin.ctx.llm.generate_with_tools = AsyncMock(return_value={"success": True, "response": "Summary OK"})
 
-        # 重点：模拟 MaiBot 宿主传入 stream_id 及额外上下文参数
+        # 重点：模拟 MaiBot 宿主传入主参数 file_id、stream_id 及额外上下文参数
         res = asyncio.run(
             plugin.read_document(
-                file_reference="test.txt",
+                file_id="test.txt",
                 user_query="概括一下",
                 stream_id="stream_abc_123",
                 chat_id="chat_456",

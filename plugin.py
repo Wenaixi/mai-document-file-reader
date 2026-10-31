@@ -1350,25 +1350,25 @@ class FileReaderPlugin(MaiBotPlugin):
 
     @Tool(
         "read_document",
-        description="读取并深度分析群聊或引用的文档文件（支持 Word .docx、PDF .pdf、Excel .xlsx/.csv、PPT .pptx、各类代码源文件及纯文本），具备图表 VLM 视觉分析与全格式自适应截断能力。",
+        description="读取并深度分析群聊或私聊中的文档文件（支持 Excel .xlsx/.csv、Word .docx、PDF .pdf、PPT .pptx、各类代码源文件及纯文本），具备图表与表格自适应结构化解析能力。",
         parameters=[
             ToolParameterInfo(
-                name="file_reference",
+                name="file_id",
                 type=ToolParamType.STRING,
-                description="文件标识，可以是引用的文件名（如：项目报告.pdf）、群文件 file_id、文件下载 URL 或临时路径",
+                description="文件的唯一标识符 file_id（优先从消息的 file_id / id 中提取），也支持文件名、文件下载 URL 或本地路径",
                 required=True,
             ),
             ToolParameterInfo(
                 name="user_query",
                 type=ToolParamType.STRING,
-                description="对文件的阅读或分析要求（如：概括核心要点、提取关键行动项、解释代码架构等），留空则使用默认要求",
+                description="对文件的阅读或分析要求（如：概括核心要点、提取关键名单数据、解释代码架构等），留空则使用默认要求",
                 required=False,
             ),
         ],
     )
     async def read_document(
         self,
-        file_reference: str = "",
+        file_id: str = "",
         user_query: str = "",
         stream_id: str = "",
         **kwargs: Any,
@@ -1376,12 +1376,13 @@ class FileReaderPlugin(MaiBotPlugin):
         """作为大模型工具供 Planner / LLM 自主调用。"""
         del stream_id  # 宿主上下文参数，工具返回结果即可
 
-        # 兼容不同模型可能使用的别名参数
-        if not (file_reference or "").strip():
-            for alias in ("file", "file_id", "url", "path", "filename", "document", "target"):
+        # 优先使用显式传入的 file_id，兼顾 file_reference 及各类别名
+        target_ref = (file_id or "").strip()
+        if not target_ref:
+            for alias in ("file_reference", "file", "url", "path", "filename", "document", "target"):
                 val = kwargs.get(alias)
                 if isinstance(val, str) and val.strip():
-                    file_reference = val
+                    target_ref = val.strip()
                     break
         del kwargs
 
@@ -1389,9 +1390,9 @@ class FileReaderPlugin(MaiBotPlugin):
             return "文件阅读插件当前未启用。"
 
         req = (user_query or "").strip() or self.config.read.default_requirement
-        file_ref = (file_reference or "").strip()
+        file_ref = target_ref
         if not file_ref:
-            return "错误: 缺少有效的文件标识参数 file_reference。"
+            return "错误: 缺少有效的文件标识参数 file_id。"
 
         try:
             file_bytes, source_desc = await self._fetch_file_bytes(file_ref)
