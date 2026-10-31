@@ -1350,7 +1350,7 @@ class FileReaderPlugin(MaiBotPlugin):
 
     @Tool(
         "read_document",
-        description="读取并深度分析群聊或私聊中的文档文件（支持 Excel .xlsx/.csv、Word .docx、PDF .pdf、PPT .pptx、各类代码源文件及纯文本），具备图表与表格自适应结构化解析能力。",
+        description="读取并深度分析群聊或私聊中的文档文件（支持 Excel .xlsx/.csv、Word .docx、PDF .pdf、PPT .pptx、各类代码源文件及纯文本）。当上下文中有用户发送的文件，或用户询问"这个你能识别吗"、"帮看下这个文件"、"总结这份PDF"时，必须优先调用本工具提取解析，严禁误调用网络搜索！具备图表与表格自适应结构化解析能力。",
         parameters=[
             ToolParameterInfo(
                 name="file_id",
