@@ -1,5 +1,11 @@
 # 文件阅读插件
 
+[![Release](https://img.shields.io/github/v/release/Wenaixi/mai-document-file-reader?style=flat-square&color=blue&label=release)](https://github.com/Wenaixi/mai-document-file-reader/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Wenaixi/mai-document-file-reader/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Wenaixi/mai-document-file-reader/actions)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue?style=flat-square)](https://www.python.org/)
+[![MaiBot](https://img.shields.io/badge/MaiBot-1.2%2B-orange?style=flat-square)](https://docs.mai-mai.org)
+
 > 本插件由 [Wenaixi](https://github.com/Wenaixi) 维护，是专为生产环境深度调优的高可用分支。
 
 ## 简介与定位
@@ -7,7 +13,6 @@
 读取群聊中的纯文本文件交给 LLM 分析概括或提取要点。
 
 - **插件目录**：`wenaixi_mai_document_file_reader`
-- **生效版本**：`v1.2.9`
 - **开源许可证**：`MIT`
 
 ---
