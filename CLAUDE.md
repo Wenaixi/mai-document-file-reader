@@ -1,37 +1,23 @@
-# 文件读插件（file-reader-plugin）
+# CLAUDE.md - 文件阅读插件 (github_xiexiaojia780_file-reader-plugin)
 
-## 官方上游与版本溯源
-- 官方仓库（Upstream Repository）：https://github.com/xiexiaojia780/file_reader_plugin
-- 官方作者（Author / Maintainer）：xiexiaojia780
-- 功能定位：文件阅读与文档解析插件
-- 本地演进定位：基于官方上游最新版本，融入本地生产环境兼容性定制与稳定性加固。
-- 本地专属定制：本地完成 task_name 模型调度解耦与沙盒白名单目录放行。
+## 1. 模块定位与系统职责
+- **插件标识符**：`github_xiexiaojia780_file-reader-plugin`
+- **当前生效版本**：`v1.2.9`
+- **托管仓库**：[`Wenaixi/file_reader_plugin`](https://github.com/Wenaixi/file_reader_plugin)
+- **核心定位**：读取群聊中的纯文本文件交给 LLM 分析概括或提取要点。
 
+## 2. 关键工程规范与配置说明
+- **配置路径**：`config.toml`（所有业务调优与鉴权参数收敛于此）；
+- **数据持久化**：优先遵循 MaiBot SDK 标准持久化规范，不直接向源码目录写入易失数据；
+- **编码与日志规范**：严格遵循 PEP 8 风格，文档与代码注释杜绝 emoji，避免虚假套话。
 
-源: GitHub `xiexiaojia780/file-reader-plugin`
+## 3. 本地深度定制与稳定性修复
+全面对齐 SnowLuma 3000 HTTP 接口与 Token；增加超大文本 20,000 字自适应安全截断保护，防止大文档炸爆大模型显存。
 
-## 主人改过的关键文件
+---
 
-- `config.toml`：
-  - `[http] http_base_url = "http://napcat:9999"`（Docker 内网服务名，不能写 127.0.0.1）。
-  - `[allowed_local_prefixes]` 加 `/MaiMBot/data`、`/app`（Docker 容器内可访问的路径前缀）。
-
-## 配置要点
-
-- 上游 `.gitignore` 完整；主人段追加作一致性（确认 `!config.toml`、`!data/` 已生效）。
-
-## 接入 & 依赖
-
-- 与 NapCat `napcat:9999` HTTP API 通信（发文件到 QQ）。
-
-## 关键日志
-
-- `文件读取插件已加载`
-
-## 用法
-
-- 群内回复"读 文件路径"，机器人读文件内容（远程文件需配置 http 服务）。
-
-## 历史脚注
-
-- 2026-07-28: 从服务器同步到本地仓库（baseline head=`159c7a0`）；补充 `.gitignore` 主人段与本 CLAUDE.md。
+## 上游项目与开源溯源
+- **原作者 / 组织**：`xiexiaojia780`
+- **官方上游仓库**：[https://github.com/xiexiaojia780/file-reader-plugin](https://github.com/xiexiaojia780/file-reader-plugin)
+- **开源许可证**：`MIT`
+- **分支演进模式**：本仓库作为主人的深度定制与生产维护分支（`Wenaixi/file_reader_plugin`）。在保持与官方上游架构演进对齐的同时，锁死并持续维护针对本服务器生产环境的稳定性补丁与核心特性。
