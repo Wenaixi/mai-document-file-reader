@@ -137,10 +137,12 @@ def test_local_file_uses_open_then_fstat_not_is_file_and_read_bytes() -> None:
     新实现：先 open(path, 'rb')（或 os.open）拿 fd，再 fstat 拿 size，最后分块读。
     Path.is_file 与 Path.read_bytes 是非原子的两步检查+读，绝对不能共存。
     """
+    import tempfile
+    tmp_dir = Path(tempfile.gettempdir())
     plugin = _make_plugin_for_fixes()
-    plugin.config.napcat.allowed_local_prefixes = "/tmp"
+    plugin.config.napcat.allowed_local_prefixes = str(tmp_dir)
 
-    target = Path("/tmp") / "test_toctou_unit.txt"
+    target = tmp_dir / "test_toctou_unit.txt"
     target.write_bytes(b"ORIGINAL")
 
     # 记录 Path 实例方法的实际调用顺序

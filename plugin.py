@@ -39,9 +39,14 @@ from charset_normalizer import from_bytes
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-from .parsers import default_registry
-from .utils.truncation import adaptive_truncate
-from .vlm.vlm_client import VLMClient
+try:
+    from .parsers import default_registry
+    from .utils.truncation import adaptive_truncate
+    from .vlm.vlm_client import VLMClient
+except ImportError:
+    from parsers import default_registry
+    from utils.truncation import adaptive_truncate
+    from vlm.vlm_client import VLMClient
 
 import aiohttp
 
@@ -407,6 +412,11 @@ class FileReaderPlugin(MaiBotPlugin):
     """文件阅读插件"""
 
     config_model = FileReaderPluginConfig
+    _vlm_client: Optional[VLMClient]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._vlm_client = None
 
     async def on_load(self) -> None:
         """处理插件加载"""
@@ -965,6 +975,15 @@ class FileReaderPlugin(MaiBotPlugin):
             # 用户提供的 URL：强制走 SSRF 校验
             return await self._download_url(file_ref, enforce_ssrf=True), f"url:{file_ref}"
 
+        # 本地路径优先：若传入的是已存在且在白名单内的本地文件路径，直接安全直读
+        try:
+            path = Path(file_ref).expanduser()
+            resolved = path.resolve(strict=False)
+            if self._is_local_path_allowed(resolved) and resolved.is_file():
+                return self._read_local_file(str(resolved)), f"local:{file_ref}"
+        except Exception:
+            pass
+
         return await self._fetch_via_napcat(file_ref), f"napcat:{file_ref}"
 
     @staticmethod
@@ -1241,7 +1260,7 @@ class FileReaderPlugin(MaiBotPlugin):
 
     async def _decode_document(self, filename: str, file_bytes: bytes) -> tuple[str, bool, str]:
         """将文档通过多格式工厂解析为文本，并执行全格式自适应结构化截断"""
-        vlm_client = self._vlm_client if getattr(self.config.vlm, "enabled", True) else None
+        vlm_client = getattr(self, "_vlm_client", None) if getattr(self.config.vlm, "enabled", True) else None
         max_images = getattr(self.config.vlm, "max_images_per_file", 3)
 
         parsed_doc = await default_registry.parse(
@@ -1273,8 +1292,25 @@ class FileReaderPlugin(MaiBotPlugin):
             ),
         ],
     )
-    async def read_document(self, file_reference: str, user_query: str = "") -> str:
+    async def read_document(
+        self,
+        file_reference: str = "",
+        user_query: str = "",
+        stream_id: str = "",
+        **kwargs: Any,
+    ) -> str:
         """作为大模型工具供 Planner / LLM 自主调用。"""
+        del stream_id  # 宿主上下文参数，工具返回结果即可
+
+        # 兼容不同模型可能使用的别名参数
+        if not (file_reference or "").strip():
+            for alias in ("file", "file_id", "url", "path", "filename", "document", "target"):
+                val = kwargs.get(alias)
+                if isinstance(val, str) and val.strip():
+                    file_reference = val
+                    break
+        del kwargs
+
         if not self.config.plugin.enabled:
             return "文件阅读插件当前未启用。"
 
@@ -1314,7 +1350,7 @@ class FileReaderPlugin(MaiBotPlugin):
         if not result.get("success"):
             return f"文档已提取（共 {len(text_content)} 字），但大模型处理失败: {result.get('reasoning') or '未知错误'}"
 
-        content = self._extract_result_text(result)
+        content = self._extract_response_text(result)
         return content or "文档已提取完毕，模型未返回文字内容。"
 
 

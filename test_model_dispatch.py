@@ -45,11 +45,31 @@ def _install_fake_sdk() -> None:
 
         return deco
 
+    def Tool(*_a: Any, **_kw: Any):
+        def deco(fn):
+            return fn
+
+        return deco
+
     fake.PluginConfigBase = PluginConfigBase
     fake.Field = Field
     fake.MaiBotPlugin = MaiBotPlugin
     fake.Command = Command
+    fake.Tool = Tool
     sys.modules["maibot_sdk"] = fake
+
+    fake_types = types.ModuleType("maibot_sdk.types")
+    class ToolParamType:
+        STRING = "string"
+        INTEGER = "integer"
+        BOOLEAN = "boolean"
+    class ToolParameterInfo:
+        def __init__(self, **kwargs: Any) -> None:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+    fake_types.ToolParamType = ToolParamType
+    fake_types.ToolParameterInfo = ToolParameterInfo
+    sys.modules["maibot_sdk.types"] = fake_types
 
 
 _install_fake_sdk()
