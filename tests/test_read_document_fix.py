@@ -74,5 +74,41 @@ class TestReadDocumentFix(unittest.TestCase):
         # 必须匹配 Snowluma HTTP 3000 端口在 onebot.json 中设定的真实 token
         self.assertEqual(token, "4CRC3EUGqk6Kq2H10XpNDyFrdJgaLua8ugi0IEa--Xs")
 
+    def test_resolve_file_from_db_returns_url_and_file_id(self):
+        from plugin import FileReaderPlugin, FileReaderPluginConfig
+        import sqlite3
+        import msgpack
+
+        plugin = FileReaderPlugin()
+        plugin.config = FileReaderPluginConfig()
+
+        # 创建一个临时测试 SQLite 库
+        test_db = PLUGIN_DIR / "tests" / "_test_temp_msg.db"
+        conn = sqlite3.connect(str(test_db))
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE mai_messages (id INTEGER PRIMARY KEY, processed_plain_text TEXT, raw_content BLOB)")
+        
+        # 写入一条包含 xlsx 文件的 raw_content
+        sample_seg = [{
+            "type": "file",
+            "data": {
+                "name": "测试名单.xlsx",
+                "file_id": "FID_TEST_123",
+                "url": "https://example.com/download/test.xlsx"
+            }
+        }]
+        packed = msgpack.packb(sample_seg)
+        cur.execute("INSERT INTO mai_messages VALUES (1, '[文件] 测试名单.xlsx', ?)", (packed,))
+        conn.commit()
+        conn.close()
+
+        with patch("pathlib.Path.exists", return_value=True), patch("sqlite3.connect", return_value=sqlite3.connect(str(test_db))):
+            url, fid = plugin._resolve_file_from_db("测试名单.xlsx")
+            self.assertEqual(url, "https://example.com/download/test.xlsx")
+            self.assertEqual(fid, "FID_TEST_123")
+
+        test_db.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main()

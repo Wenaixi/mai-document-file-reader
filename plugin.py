@@ -968,6 +968,43 @@ class FileReaderPlugin(MaiBotPlugin):
     # 取文件
     # ------------------------------------------------------------------
 
+    def _resolve_file_from_db(self, filename: str) -> tuple[str | None, str | None]:
+        """从 mai_messages 表中查找匹配文件名的最近一条记录，提取 (url, file_id)"""
+        if not filename or len(filename) < 2:
+            return None, None
+        for db_candidate in ("/MaiMBot/data/MaiBot.db", "data/MaiBot.db"):
+            db_p = Path(db_candidate)
+            if db_p.exists():
+                try:
+                    import sqlite3
+                    conn = sqlite3.connect(str(db_p), timeout=1)
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT raw_content FROM mai_messages WHERE processed_plain_text LIKE ? OR raw_content LIKE ? ORDER BY id DESC LIMIT 5",
+                        (f"%{filename}%", f"%{filename}%")
+                    )
+                    rows = cur.fetchall()
+                    conn.close()
+                    for (raw_bytes,) in rows:
+                        if not raw_bytes:
+                            continue
+                        try:
+                            import msgpack
+                            segments = msgpack.unpackb(raw_bytes)
+                        except Exception:
+                            continue
+                        if isinstance(segments, list):
+                            for seg in segments:
+                                if isinstance(seg, dict) and seg.get("type") == "file":
+                                    data = seg.get("data") or {}
+                                    if data.get("name") == filename or filename in data.get("name", ""):
+                                        url = data.get("url")
+                                        fid = data.get("file_id") or data.get("id")
+                                        return url, fid
+                except Exception as exc:
+                    self.ctx.logger.debug("从 DB 匹配文件名失败: %s", exc)
+        return None, None
+
     async def _fetch_file_bytes(self, file_ref: str) -> tuple[bytes, str]:
         """根据文件标识获取文件字节"""
 
@@ -984,7 +1021,16 @@ class FileReaderPlugin(MaiBotPlugin):
         except Exception:
             pass
 
-        return await self._fetch_via_napcat(file_ref), f"napcat:{file_ref}"
+        # 名字/ID 映射兜底：若传入的是文件名，优先从消息库恢复直链或真实 file_id
+        db_url, db_fid = self._resolve_file_from_db(file_ref)
+        if db_url and self._is_http_url(db_url):
+            try:
+                return await self._download_url(db_url, enforce_ssrf=False), f"url:{db_url}"
+            except Exception as exc:
+                self.ctx.logger.warning("通过消息库直链下载失败，回退 NapCat 接口: %s", exc)
+
+        target_id = db_fid or file_ref
+        return await self._fetch_via_napcat(target_id), f"napcat:{target_id}"
 
     @staticmethod
     def _is_http_url(value: str) -> bool:
@@ -1139,19 +1185,47 @@ class FileReaderPlugin(MaiBotPlugin):
         max_bytes = self.config.read.max_download_bytes
         # 提前检查 Content-Length，避免 await response.json() 拉取过大响应体到内存
         max_b64_chars = math.ceil(max_bytes / 3) * 4
+        payload: dict[str, Any] | None = None
         async with aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=False) as session:
-            async with session.post(f"{base_url}/get_file", json={"file_id": file_id, "file": file_id}) as response:
-                response.raise_for_status()
-                cl_raw = response.headers.get("content-length")
-                if cl_raw:
-                    try:
-                        cl_int = int(cl_raw)
-                    except (TypeError, ValueError):
-                        cl_int = 0
-                    # JSON body ≈ base64 长度 + 少量包装字符，留 2x 余量保守估计
-                    if cl_int > max_b64_chars * 2:
-                        raise ValueError(f"NapCat get_file 响应体超过上限（{max_bytes} 字节）")
-                payload = await response.json(content_type=None)
+            # 1. 尝试 get_file（常规/图片/语音）
+            try:
+                async with session.post(f"{base_url}/get_file", json={"file_id": file_id, "file": file_id}) as response:
+                    if response.status == 200:
+                        cl_raw = response.headers.get("content-length")
+                        if cl_raw:
+                            try:
+                                cl_int = int(cl_raw)
+                            except (TypeError, ValueError):
+                                cl_int = 0
+                            if cl_int > max_b64_chars * 2:
+                                raise ValueError(f"NapCat get_file 响应体超过上限（{max_bytes} 字节）")
+                        p = await response.json(content_type=None)
+                        if isinstance(p, dict) and p.get("status") != "failed":
+                            payload = p
+            except Exception:
+                pass
+
+            # 2. 尝试 get_private_file_url（NapCat 私聊文件标准接口）
+            if not payload or not isinstance(payload.get("data"), dict):
+                try:
+                    async with session.post(f"{base_url}/get_private_file_url", json={"file_id": file_id}) as response:
+                        if response.status == 200:
+                            p = await response.json(content_type=None)
+                            if isinstance(p, dict) and p.get("status") != "failed":
+                                payload = p
+                except Exception:
+                    pass
+
+            # 3. 尝试 get_group_file_url（NapCat 群文件标准接口）
+            if not payload or not isinstance(payload.get("data"), dict):
+                try:
+                    async with session.post(f"{base_url}/get_group_file_url", json={"file_id": file_id}) as response:
+                        if response.status == 200:
+                            p = await response.json(content_type=None)
+                            if isinstance(p, dict) and p.get("status") != "failed":
+                                payload = p
+                except Exception:
+                    pass
 
         if not isinstance(payload, dict) or payload.get("status") == "failed":
             raise ValueError(f"NapCat get_file 返回异常：{self._safe_summary(payload)}")
