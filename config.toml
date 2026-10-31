@@ -6,7 +6,7 @@ config_version = "1.0.0"
 # NapCat OneBot HTTP 服务地址（需在 NapCat 中开启 HTTP）
 http_base_url = "http://snowluma:3000"
 # NapCat access token；未设置则留空
-access_token = "4CRC3EUGqk6Kq2H10XpNDyFrdJgaLua8ugi0IEa--Xs"
+access_token = "REDACTED_NAPCAT_TOKEN"
 # 允许读取本地路径的目录前缀（逗号分隔）。留空=禁止本地路径，只接受 base64/url。
 # 默认仅临时目录；请按实际 NapCat 缓存目录收紧，不要写 C:\Users 这类过宽前缀。
 # get_file 走裸 HTTP（不经 SDK），http_base_url 请只指向可信本机 NapCat。

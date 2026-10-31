@@ -72,7 +72,7 @@ class TestReadDocumentFix(unittest.TestCase):
         
         token = data.get("napcat", {}).get("access_token", "")
         # 必须匹配 Snowluma HTTP 3000 端口在 onebot.json 中设定的真实 token
-        self.assertEqual(token, "4CRC3EUGqk6Kq2H10XpNDyFrdJgaLua8ugi0IEa--Xs")
+        self.assertEqual(token, "REDACTED_NAPCAT_TOKEN")
 
     def test_resolve_file_from_db_returns_url_and_file_id(self):
         from plugin import FileReaderPlugin, FileReaderPluginConfig
@@ -84,6 +84,7 @@ class TestReadDocumentFix(unittest.TestCase):
 
         # 创建一个临时测试 SQLite 库
         test_db = PLUGIN_DIR / "tests" / "_test_temp_msg.db"
+        test_db.unlink(missing_ok=True)
         conn = sqlite3.connect(str(test_db))
         cur = conn.cursor()
         cur.execute("CREATE TABLE mai_messages (id INTEGER PRIMARY KEY, processed_plain_text TEXT, raw_content BLOB)")
@@ -102,10 +103,22 @@ class TestReadDocumentFix(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        with patch("pathlib.Path.exists", return_value=True), patch("sqlite3.connect", return_value=sqlite3.connect(str(test_db))):
-            url, fid = plugin._resolve_file_from_db("测试名单.xlsx")
+        _real_connect = sqlite3.connect
+        with patch("pathlib.Path.exists", return_value=True), patch("sqlite3.connect", side_effect=lambda *a, **kw: _real_connect(str(test_db))):
+            url, fid, uid, fname = plugin._resolve_file_from_db("测试名单.xlsx")
             self.assertEqual(url, "https://example.com/download/test.xlsx")
             self.assertEqual(fid, "FID_TEST_123")
+            self.assertEqual(fname, "测试名单.xlsx")
+
+            # 测试传入消息编号（如 -708833119 或 1）
+            url2, fid2, uid2, fname2 = plugin._resolve_file_from_db("1")
+            self.assertEqual(url2, "https://example.com/download/test.xlsx")
+            self.assertEqual(fid2, "FID_TEST_123")
+
+            # 测试空参数自动回溯最近文件
+            url3, fid3, uid3, fname3 = plugin._resolve_file_from_db("")
+            self.assertEqual(url3, "https://example.com/download/test.xlsx")
+            self.assertEqual(fid3, "FID_TEST_123")
 
         test_db.unlink(missing_ok=True)
 

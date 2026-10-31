@@ -968,24 +968,70 @@ class FileReaderPlugin(MaiBotPlugin):
     # 取文件
     # ------------------------------------------------------------------
 
-    def _resolve_file_from_db(self, filename: str) -> tuple[str | None, str | None]:
-        """从 mai_messages 表中查找匹配文件名的最近一条记录，提取 (url, file_id)"""
-        if not filename or len(filename) < 2:
-            return None, None
+    def _resolve_file_from_db(self, file_ref: str) -> tuple[str | None, str | None, int | None, str | None]:
+        """从 mai_messages 表中查找匹配记录，返回 (url, file_id, user_id, filename)。
+        
+        支持：
+        1. 消息编号 message_id (如 -708833119) 或本地自增 id
+        2. 文件名匹配 (如 信息社活动大致方案.docx)
+        3. 空参数时自动向上回溯最近一条包含文件的消息记录
+        """
         for db_candidate in ("/MaiMBot/data/MaiBot.db", "data/MaiBot.db"):
             db_p = Path(db_candidate)
             if db_p.exists():
                 try:
                     import sqlite3
-                    conn = sqlite3.connect(str(db_p), timeout=1)
+                    conn = sqlite3.connect(str(db_p), timeout=2)
                     cur = conn.cursor()
-                    cur.execute(
-                        "SELECT raw_content FROM mai_messages WHERE processed_plain_text LIKE ? OR raw_content LIKE ? ORDER BY id DESC LIMIT 5",
-                        (f"%{filename}%", f"%{filename}%")
-                    )
-                    rows = cur.fetchall()
+
+                    col_names = {r[1] for r in cur.execute("PRAGMA table_info(mai_messages)").fetchall()}
+                    has_mid = "message_id" in col_names
+                    has_uid = "user_id" in col_names
+
+                    rows = []
+                    ref_str = str(file_ref or "").strip()
+
+                    # 1. 尝试按 message_id 或 id 查询
+                    if ref_str.lstrip("-").isdigit():
+                        if has_mid and has_uid:
+                            cur.execute(
+                                "SELECT user_id, raw_content FROM mai_messages WHERE message_id = ? OR id = ? LIMIT 1",
+                                (ref_str, ref_str),
+                            )
+                            rows = cur.fetchall()
+                        elif has_mid:
+                            cur.execute(
+                                "SELECT NULL, raw_content FROM mai_messages WHERE message_id = ? OR id = ? LIMIT 1",
+                                (ref_str, ref_str),
+                            )
+                            rows = cur.fetchall()
+                        else:
+                            cur.execute(
+                                "SELECT NULL, raw_content FROM mai_messages WHERE id = ? LIMIT 1",
+                                (ref_str,),
+                            )
+                            rows = cur.fetchall()
+
+                    # 2. 如果未命中且有文件名，按文件名搜索
+                    if not rows and ref_str and not ref_str.lstrip("-").isdigit():
+                        uid_col = "user_id" if has_uid else "NULL"
+                        cur.execute(
+                            f"SELECT {uid_col}, raw_content FROM mai_messages WHERE processed_plain_text LIKE ? OR raw_content LIKE ? ORDER BY id DESC LIMIT 5",
+                            (f"%{ref_str}%", f"%{ref_str}%"),
+                        )
+                        rows = cur.fetchall()
+
+                    # 3. 如果仍未命中（或未传参），自动回溯最近一条带文件的消息
+                    if not rows:
+                        uid_col = "user_id" if has_uid else "NULL"
+                        cur.execute(
+                            f"SELECT {uid_col}, raw_content FROM mai_messages WHERE processed_plain_text LIKE '%[文件]%' OR raw_content LIKE '%\"type\": \"file\"%' ORDER BY id DESC LIMIT 1"
+                        )
+                        rows = cur.fetchall()
+
                     conn.close()
-                    for (raw_bytes,) in rows:
+
+                    for user_id, raw_bytes in rows:
                         if not raw_bytes:
                             continue
                         try:
@@ -997,40 +1043,48 @@ class FileReaderPlugin(MaiBotPlugin):
                             for seg in segments:
                                 if isinstance(seg, dict) and seg.get("type") == "file":
                                     data = seg.get("data") or {}
-                                    if data.get("name") == filename or filename in data.get("name", ""):
-                                        url = data.get("url")
-                                        fid = data.get("file_id") or data.get("id")
-                                        return url, fid
+                                    url = data.get("url")
+                                    fid = data.get("file_id") or data.get("id")
+                                    fname = data.get("name") or data.get("file_name") or None
+                                    uid = None
+                                    try:
+                                        uid = int(user_id) if user_id else None
+                                    except (ValueError, TypeError):
+                                        pass
+                                    return url, fid, uid, fname
                 except Exception as exc:
-                    self.ctx.logger.debug("从 DB 匹配文件名失败: %s", exc)
-        return None, None
+                    logger = getattr(self.ctx, "logger", None)
+                    if logger:
+                        logger.debug("从 DB 匹配文件失败: %s", exc)
+        return None, None, None, None
 
     async def _fetch_file_bytes(self, file_ref: str) -> tuple[bytes, str]:
-        """根据文件标识获取文件字节"""
+        """根据文件标识或消息编号获取文件字节，返回 (字节内容, 解析出的真实文件名或来源)"""
 
         if self._is_http_url(file_ref):
             # 用户提供的 URL：强制走 SSRF 校验
-            return await self._download_url(file_ref, enforce_ssrf=True), f"url:{file_ref}"
+            return await self._download_url(file_ref, enforce_ssrf=True), file_ref.split("/")[-1].split("?")[0]
 
         # 本地路径优先：若传入的是已存在且在白名单内的本地文件路径，直接安全直读
         try:
             path = Path(file_ref).expanduser()
             resolved = path.resolve(strict=False)
             if self._is_local_path_allowed(resolved) and resolved.is_file():
-                return self._read_local_file(str(resolved)), f"local:{file_ref}"
+                return self._read_local_file(str(resolved)), resolved.name
         except Exception:
             pass
 
-        # 名字/ID 映射兜底：若传入的是文件名，优先从消息库恢复直链或真实 file_id
-        db_url, db_fid = self._resolve_file_from_db(file_ref)
+        # 名字/ID/消息编号 自动映射兜底
+        db_url, db_fid, db_uid, db_fname = self._resolve_file_from_db(file_ref)
         if db_url and self._is_http_url(db_url):
             try:
-                return await self._download_url(db_url, enforce_ssrf=False), f"url:{db_url}"
+                return await self._download_url(db_url, enforce_ssrf=False), db_fname or "document.bin"
             except Exception as exc:
                 self.ctx.logger.warning("通过消息库直链下载失败，回退 NapCat 接口: %s", exc)
 
         target_id = db_fid or file_ref
-        return await self._fetch_via_napcat(target_id), f"napcat:{target_id}"
+        file_bytes = await self._fetch_via_napcat(target_id, user_id=db_uid)
+        return file_bytes, db_fname or target_id
 
     @staticmethod
     def _is_http_url(value: str) -> bool:
@@ -1164,7 +1218,7 @@ class FileReaderPlugin(MaiBotPlugin):
 
         raise ValueError(f"下载重定向次数超过上限（{_MAX_DOWNLOAD_REDIRECTS}）")
 
-    async def _fetch_via_napcat(self, file_id: str) -> bytes:
+    async def _fetch_via_napcat(self, file_id: str, user_id: int | None = None) -> bytes:
         """通过 NapCat OneBot ``get_file`` action 获取文件
 
         对返回数据做多字段兜底：优先 ``base64``，其次 ``url`` 直链下载，最后本地 ``file`` 路径读取
@@ -1180,7 +1234,8 @@ class FileReaderPlugin(MaiBotPlugin):
         timeout = aiohttp.ClientTimeout(total=self.config.read.timeout_seconds)
         headers: dict[str, str] = {}
         if napcat_config.access_token:
-            headers["Authorization"] = f"Bearer {napcat_config.access_token}"
+            _tk = str(napcat_config.access_token).strip()
+            headers["Authorization"] = _tk if _tk.startswith("Bearer ") else f"Bearer {_tk}"
 
         max_bytes = self.config.read.max_download_bytes
         # 提前检查 Content-Length，避免 await response.json() 拉取过大响应体到内存
@@ -1208,7 +1263,10 @@ class FileReaderPlugin(MaiBotPlugin):
             # 2. 尝试 get_private_file_url（NapCat 私聊文件标准接口）
             if not payload or not isinstance(payload.get("data"), dict):
                 try:
-                    async with session.post(f"{base_url}/get_private_file_url", json={"file_id": file_id}) as response:
+                    req_payload: dict[str, Any] = {"file_id": file_id}
+                    if user_id:
+                        req_payload["user_id"] = user_id
+                    async with session.post(f"{base_url}/get_private_file_url", json=req_payload) as response:
                         if response.status == 200:
                             p = await response.json(content_type=None)
                             if isinstance(p, dict) and p.get("status") != "failed":
@@ -1350,13 +1408,13 @@ class FileReaderPlugin(MaiBotPlugin):
 
     @Tool(
         "read_document",
-        description="读取并深度分析群聊或私聊中的文档文件（支持 Excel .xlsx/.csv、Word .docx、PDF .pdf、PPT .pptx、各类代码源文件及纯文本）。当上下文中有用户发送的文件，或用户询问"这个你能识别吗"、"帮看下这个文件"、"总结这份PDF"时，必须优先调用本工具提取解析，严禁误调用网络搜索！具备图表与表格自适应结构化解析能力。",
+        description="读取并解析聊天中的文档内容。支持格式：PDF(.pdf)、Word(.docx)、Excel/CSV(.xlsx/.csv)、PPT(.pptx)、纯文本及各类代码源文件(.txt/.md/.json/.py等)。当用户发送文件、要求查看、阅读或总结文档时调用本工具。",
         parameters=[
             ToolParameterInfo(
                 name="file_id",
                 type=ToolParamType.STRING,
-                description="文件的唯一标识符 file_id（优先从消息的 file_id / id 中提取），也支持文件名、文件下载 URL 或本地路径",
-                required=True,
+                description="文件标识，支持消息编号（如 -708833119）、文件名或从消息提取的 file_id；留空则自动读取聊天中最近发送的文件",
+                required=False,
             ),
             ToolParameterInfo(
                 name="user_query",
@@ -1376,7 +1434,7 @@ class FileReaderPlugin(MaiBotPlugin):
         """作为大模型工具供 Planner / LLM 自主调用。"""
         del stream_id  # 宿主上下文参数，工具返回结果即可
 
-        # 优先使用显式传入的 file_id，兼顾 file_reference 及各类别名
+        # 优先使用显式传入的 file_id，兼顾各类别名
         target_ref = (file_id or "").strip()
         if not target_ref:
             for alias in ("file_reference", "file", "url", "path", "filename", "document", "target"):
@@ -1391,15 +1449,13 @@ class FileReaderPlugin(MaiBotPlugin):
 
         req = (user_query or "").strip() or self.config.read.default_requirement
         file_ref = target_ref
-        if not file_ref:
-            return "错误: 缺少有效的文件标识参数 file_id。"
 
         try:
             file_bytes, source_desc = await self._fetch_file_bytes(file_ref)
         except Exception as exc:
-            return f"获取文档失败 ({file_ref}): {exc}"
+            return f"获取文档失败 ({file_ref or '最近文件'}): {exc}"
 
-        filename = file_ref.split("/")[-1].split("?")[0] or "document.txt"
+        filename = source_desc or file_ref.split("/")[-1].split("?")[0] or "document.bin"
         text_content, truncated, doc_format = await self._decode_document(filename, file_bytes)
 
         if not text_content.strip():
