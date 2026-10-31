@@ -1,12 +1,9 @@
 {
   "manifest_version": 2,
   "version": "1.2.9",
-  "name": "文件阅读插件",
+  "name": "麦麦群文件快速阅读与提炼",
   "description": "通过指令或引用文件消息读取纯文本文件，交给 LLM 按要求处理后回复",
-  "author": {
-    "name": "xiexiaojia780",
-    "url": "https://github.com/xiexiaojia780"
-  },
+  "author": "Wenaixi",
   "license": "GPL-3.0-or-later",
   "urls": {
     "repository": "https://github.com/xiexiaojia780/file_reader_plugin"
@@ -44,5 +41,5 @@
       "zh-CN"
     ]
   },
-  "id": "github.xiexiaojia780.file-reader-plugin"
+  "id": "wenaixi.mai_document_file_reader"
 }

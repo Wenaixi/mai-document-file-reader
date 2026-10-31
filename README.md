@@ -6,7 +6,7 @@
 
 读取群聊中的纯文本文件交给 LLM 分析概括或提取要点。
 
-- **插件目录**：`github_xiexiaojia780_file-reader-plugin`
+- **插件目录**：`wenaixi_mai_document_file_reader`
 - **生效版本**：`v1.2.9`
 - **开源许可证**：`MIT`
 
