@@ -72,7 +72,7 @@ class TestReadDocumentFix(unittest.TestCase):
         
         token = data.get("napcat", {}).get("access_token", "")
         # 必须匹配 Snowluma HTTP 3000 端口在 onebot.json 中设定的真实 token
-        self.assertEqual(token, "REDACTED_NAPCAT_TOKEN")
+        self.assertEqual(token, "test_mock_token_12345")
 
     def test_resolve_file_from_db_returns_url_and_file_id(self):
         from plugin import FileReaderPlugin, FileReaderPluginConfig
